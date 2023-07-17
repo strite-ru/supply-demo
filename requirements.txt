@@ -1,0 +1,19 @@
+blessed==1.20.0
+certifi==2023.5.7
+charset-normalizer==3.2.0
+idna==3.4
+markdown-it-py==3.0.0
+mdurl==0.1.2
+oauthlib==3.2.2
+pick==2.2.0
+Pygments==2.15.1
+python-editor==1.0.4
+readchar==4.0.5
+requests==2.31.0
+requests-oauthlib==1.3.1
+rich==13.4.2
+six==1.16.0
+strite-data-hub @ git+https://github.com/strite-ru/strite-data-hub.git@a0a01b2ea08c543b5fed475d409b7c270fddc916
+tqdm==4.65.0
+urllib3==2.0.3
+wcwidth==0.2.6
