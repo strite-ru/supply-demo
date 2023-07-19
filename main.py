@@ -31,8 +31,13 @@ def init_data() -> OzonAPI:
 def select_products(products: List[OzonProduct]) -> List[OzonProduct]:
     products_vendor_codes = [product.vendor_code for product in products]
     products_vendor_codes.sort()
-    selected_products_vendor_codes = pick.pick(products_vendor_codes, "Выберите товары, которые будут отправляться:",
+    selected_products = pick.pick(products_vendor_codes, "Выберите товары, которые будут отправляться:\nЕсли ничего не выбрано то все товары",
                                                multiselect=True)
+
+    if not selected_products:
+        return products
+
+    selected_products_vendor_codes = [vendor_code for vendor_code, _ in selected_products]
     return [product for product in products if product.vendor_code in selected_products_vendor_codes]
 
 
@@ -78,6 +83,10 @@ def main(period_transactions: int = 29):
     del wl, dt
     logger.info(f"Время доставки: {delivery_time}")
 
+    size_supply = int(input("Введите размер поставки: "))
+    period_supply = int(input("Введите период поставки: "))
+    prepare_days = int(input("Введите время подготовки (дни): "))
+
     stocks = list(OzonStockOnWarehouse.get_stocks(api))
 
     # Получаем данные о транзакциях
@@ -115,7 +124,7 @@ def main(period_transactions: int = 29):
     for sku in tqdm(skus):
         def get_product() -> OzonProduct | None:
             _p = None
-            for item in products:
+            for item in selected_products:
                 if next((item for _size in item.sizes if _size.id == sku and _size.type == 'fbo'), None):
                     _p = item
             return _p
@@ -147,7 +156,7 @@ def main(period_transactions: int = 29):
         rms_deviation = 6.0
 
         # Среднее время доставки (из матрицы доставки) + обработки
-        avg_delivery_time = delivery_time
+        avg_delivery_time = delivery_time + timedelta(days=prepare_days)
 
         # Текущий остаток на складе
         stock_search = [s for s in stocks if s.vendor_code == product.vendor_code and s.warehouse == warehouse_to]
@@ -160,13 +169,13 @@ def main(period_transactions: int = 29):
         predication_fos = get_basic_predication_supplies_fos(current_stock=stock,
                                                              avg_consumption=avg_count_per_day,
                                                              deviation_sales=rms_deviation,
-                                                             size_supply=10,
+                                                             size_supply=size_supply,
                                                              supply_delivery_time=avg_delivery_time)
         predication_fof = get_basic_predication_supplies_fof(current_stock=stock,
                                                              avg_consumption=avg_count_per_day,
                                                              deviation_sales=rms_deviation,
                                                              supply_delivery_time=avg_delivery_time,
-                                                             period=timedelta(days=7))
+                                                             period=timedelta(days=period_supply))
 
         table.add_row(
             product.vendor_code,
