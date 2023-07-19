@@ -52,7 +52,7 @@ def select_warehouses_to(w: List[dict], warehouses: List[OzonWarehouse]) -> Ozon
 
 
 def main(period_transactions: int = 29):
-    warehouses_local = json.load(open('warehouses.json'))
+    warehouses_local = json.load(open('./warehouses.json'))
 
     api = init_data()
 
