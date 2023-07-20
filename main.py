@@ -182,8 +182,12 @@ def main(period_transactions: int = 29):
                                                                  deviation_sales=rms_deviation,
                                                                  supply_delivery_time=avg_delivery_time,
                                                                  period=timedelta(days=period_supply))
+
+            if (predication_fos.supply_date or predication_fof.supply_date) < avg_delivery_time:
+                style = "orange_red1 on white"
         else:
             style = "red on white"
+
 
         table.add_row(
             product.vendor_code,
