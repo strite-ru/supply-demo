@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import List, Union
+import math
+from typing import List
 import pick
 from datetime import timedelta, datetime
 
@@ -140,24 +141,22 @@ def main(period_transactions: int = 29):
         logger.info(f"Всего транзакций по товару: {len(product_transactions)}")
         # Отправления по товару
         product_postings = list({tr.order_id for tr in product_transactions})
-        product_warehouses = {}
+        product_sold = {x: 0 for x in range(period_transactions)}
+
         for p_n in product_postings:
             posting = OzonPosting.get_fbo_posting_by_posting_number(api, p_n)
             count = sum([o.quantity for o in posting.orders if o.vendor_code == product.vendor_code], 0)
-            if product_warehouses.get(str(posting.warehouse_id), None):
-                product_warehouses[str(posting.warehouse_id)] += count
-            else:
-                product_warehouses[str(posting.warehouse_id)] = count
-        logger.info(f"Продано: {product_warehouses}")
-        total_sold = product_warehouses.get(warehouse_to.id, 0)
+            if str(posting.warehouse_id) == warehouse_to.id:
+                product_sold[(datetime.now() - posting.processTo).days] = count
+
+        total_sold = sum([product_sold[x] for x in product_sold.keys()])
         logger.info(f"Всего продано: {total_sold}")
 
         avg_count_per_day = total_sold / period_transactions
+        logger.info(f"Среднее число продаж в день: {avg_count_per_day}")
+        rms_deviation = math.sqrt(1/period_transactions * math.pow(sum([(product_sold[x] - avg_count_per_day) for x in product_sold.keys()]), 2))
         if avg_count_per_day == 0:
             avg_count_per_day = 0.01
-        logger.info(f"Среднее число продаж в день: {avg_count_per_day}")
-        # TODO add calc
-        rms_deviation = 6.0
 
         # Среднее время доставки (из матрицы доставки) + обработки
         avg_delivery_time = delivery_time + timedelta(days=prepare_days)
@@ -180,6 +179,9 @@ def main(period_transactions: int = 29):
                                                              deviation_sales=rms_deviation,
                                                              supply_delivery_time=avg_delivery_time,
                                                              period=timedelta(days=period_supply))
+        style = None
+        if predication_fos.supply_date.days < period_supply:
+            style = "red on white"
 
         table.add_row(
             product.vendor_code,
@@ -187,11 +189,12 @@ def main(period_transactions: int = 29):
             str(stock),
             str(total_sold),
             "{:.2f}".format(avg_count_per_day),
-            str(rms_deviation),
+            "{:.2f}".format(rms_deviation),
             str(predication_fos.supply_date.days),
             (datetime.now() + predication_fos.supply_date).strftime("%d.%m.%Y"),
             "{:.2f}".format(predication_fof.supply_size),
             (datetime.now() + predication_fof.supply_date).strftime("%d.%m.%Y"),
+            style=style
         )
 
     console.print(table)
