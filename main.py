@@ -7,6 +7,7 @@ from datetime import timedelta, datetime
 
 from rich.console import Console
 from rich.table import Table
+from strite_data_hub.dataclasses import PredictionFOS, PredictionFOF
 from strite_data_hub.parsers.ozon import OzonAPI, OzonWarehouse, OzonProduct, OzonStockOnWarehouse, OzonTransaction, \
     OzonPosting
 from strite_data_hub.prediction.supplies.basic import get_basic_predication_supplies_fos, \
@@ -115,8 +116,8 @@ def main(period_transactions: int = 29):
     table.add_column("Склад", no_wrap=True)
     table.add_column("Остаток", justify="center")
     table.add_column("Всего продано", justify="center")
-    table.add_column("Среднее число продаж в день", justify="center")
-    table.add_column("Среднеквадратичное отклонение", justify="center")
+    table.add_column("Продаж в день", justify="center")
+    table.add_column("sigma", justify="center")
     table.add_column("До поставки", justify="center")
     table.add_column("Дата поставки", justify="center")
     table.add_column("Размер поставки", justify="center")
@@ -155,8 +156,6 @@ def main(period_transactions: int = 29):
         avg_count_per_day = total_sold / period_transactions
         logger.info(f"Среднее число продаж в день: {avg_count_per_day}")
         rms_deviation = math.sqrt(1/period_transactions * math.pow(sum([(product_sold[x] - avg_count_per_day) for x in product_sold.keys()]), 2))
-        if avg_count_per_day == 0:
-            avg_count_per_day = 0.01
 
         # Среднее время доставки (из матрицы доставки) + обработки
         avg_delivery_time = delivery_time + timedelta(days=prepare_days)
@@ -169,18 +168,21 @@ def main(period_transactions: int = 29):
         else:
             stock = stock_search[0].free_to_sell_amount
 
-        predication_fos = get_basic_predication_supplies_fos(current_stock=stock,
-                                                             avg_consumption=avg_count_per_day,
-                                                             deviation_sales=rms_deviation,
-                                                             size_supply=size_supply,
-                                                             supply_delivery_time=avg_delivery_time)
-        predication_fof = get_basic_predication_supplies_fof(current_stock=stock,
-                                                             avg_consumption=avg_count_per_day,
-                                                             deviation_sales=rms_deviation,
-                                                             supply_delivery_time=avg_delivery_time,
-                                                             period=timedelta(days=period_supply))
         style = None
-        if predication_fos.supply_date.days < period_supply:
+        predication_fos = PredictionFOS()
+        predication_fof = PredictionFOF()
+        if avg_count_per_day > 0:
+            predication_fos = get_basic_predication_supplies_fos(current_stock=stock,
+                                                                 avg_consumption=avg_count_per_day,
+                                                                 deviation_sales=rms_deviation,
+                                                                 size_supply=size_supply,
+                                                                 supply_delivery_time=avg_delivery_time)
+            predication_fof = get_basic_predication_supplies_fof(current_stock=stock,
+                                                                 avg_consumption=avg_count_per_day,
+                                                                 deviation_sales=rms_deviation,
+                                                                 supply_delivery_time=avg_delivery_time,
+                                                                 period=timedelta(days=period_supply))
+        else:
             style = "red on white"
 
         table.add_row(
