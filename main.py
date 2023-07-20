@@ -185,7 +185,12 @@ def main(period_transactions: int = 29):
 
             if (predication_fos.supply_date or predication_fof.supply_date) < avg_delivery_time:
                 style = "orange_red1 on white"
-        else:
+            if predication_fos.supply_date.days < 0:
+                predication_fos.supply_date = timedelta(days=0)
+            if predication_fof.supply_date.days < 0:
+                predication_fof.supply_date = timedelta(days=0)
+
+        if avg_count_per_day == 0 or stock == 0:
             style = "red on white"
 
 
