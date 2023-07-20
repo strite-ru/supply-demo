@@ -140,12 +140,16 @@ def main(period_transactions: int = 29):
         logger.info(f"Всего транзакций по товару: {len(product_transactions)}")
         # Отправления по товару
         product_postings = list({tr.order_id for tr in product_transactions})
-        total_sold = 0
+        product_warehouses = {}
         for p_n in product_postings:
             posting = OzonPosting.get_fbo_posting_by_posting_number(api, p_n)
             count = sum([o.quantity for o in posting.orders if o.vendor_code == product.vendor_code], 0)
-            if warehouse_to.id == posting.warehouse_id:
-                total_sold += count
+            if product_warehouses.get(str(posting.warehouse_id), None):
+                product_warehouses[str(posting.warehouse_id)] += count
+            else:
+                product_warehouses[str(posting.warehouse_id)] = count
+        logger.info(f"Продано: {product_warehouses}")
+        total_sold = product_warehouses.get(warehouse_to.id, 0)
         logger.info(f"Всего продано: {total_sold}")
 
         avg_count_per_day = total_sold / period_transactions
