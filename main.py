@@ -140,7 +140,7 @@ def main(period_transactions: int = 35):
     table.add_column("Дата поставки", justify="center")
     table.add_column("Размер поставки", justify="center")
     table.add_column("Дата поставки", justify="center")
-    table.add_column("ML поставка", justify="center")
+    table.add_column("ML поставка (7 дней)", justify="center")
 
     for vendor_code in tqdm(selected_products):
         # find all orders with vendor_code
@@ -160,14 +160,14 @@ def main(period_transactions: int = 35):
             logger.info(f"{len(cluster_orders)} заказов на кластер {cluster_from.name}")
 
             product_sold = {x: 0 for x in range(datetime.now().isocalendar()[1] - period_transactions,
-                                                datetime.now().isocalendar()[1])}
+                                                datetime.now().isocalendar()[1]+1)}
             for order in cluster_orders:
                 product_sold[order['week']] += order['quantity']
 
             total_sold = sum([product_sold[x] for x in product_sold.keys()])
 
             avg_price_by_week = {x: 0 for x in range(datetime.now().isocalendar()[1] - period_transactions,
-                                                     datetime.now().isocalendar()[1])}
+                                                     datetime.now().isocalendar()[1]+1)}
             for order in cluster_orders:
                 avg_price_by_week[order['week']] += order['price']
 
