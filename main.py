@@ -52,7 +52,13 @@ def get_cluster_by_name(name: str) -> OzonCluster:
     return next((c for c in clusters if c.name == name), None)
 
 
-def main(period_transactions: int = 30):
+def select_cluster_to() -> OzonCluster:
+    clusters_names = [c.name for c in clusters]
+    selected_cluster = pick.pick(clusters_names,"Выберите кластер для которого необходим расчет")
+    return next((c for c in clusters if c.name == selected_cluster[0]), None)
+
+
+def main(period_transactions: int = 35):
     api = init_data()
 
     postings: List[OzonFBOPosting] = list(OzonFBOPosting.get_postings(api,
@@ -73,7 +79,7 @@ def main(period_transactions: int = 30):
     logger.info(f"Выбрано {len(selected_products)} товаров")
 
     # TODO выбор склада отгрузки
-    cluster_from = get_cluster_by_name('Северо-запад')
+    cluster_to_calc = select_cluster_to()
     size_supply = int(input("Введите размер поставки: "))
     period_supply = int(input("Введите период поставки: "))
     prepare_days = int(input("Введите время подготовки (дни): "))
@@ -84,28 +90,33 @@ def main(period_transactions: int = 30):
         cluster_to = get_cluster_by_region(posting.warehouse['region'])
         if (cluster_from is None) or (cluster_to is None):
             logger.error(f"Не удалось определить кластер для склада {posting.warehouse}")
-        else:
-            for order in posting.orders:
-                if order.vendor_code in selected_products:
-                    # update route if vendor_code, from, to, week exists
-                    if next((r for r in orders if
-                             r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
-                                 'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]), None):
-                        route = next((r for r in orders if
-                                      r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
-                                          'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]),
-                                     None)
-                        route['quantity'] += order.quantity
-                        route['price'] += order.price
-                    else:
-                        orders.append({
-                            "from": cluster_from,
-                            "to": cluster_to,
-                            "vendor_code": order.vendor_code,
-                            "quantity": order.quantity,
-                            "price": order.price,
-                            "week": posting.processTo.isocalendar()[1]
-                        })
+            continue
+
+        if cluster_to_calc.name != cluster_to.name:
+            logger.warning(f"Не совпадает кластер {cluster_to_calc.name} и {cluster_to.name}")
+            continue
+
+        for order in posting.orders:
+            if order.vendor_code in selected_products:
+                # update route if vendor_code, from, to, week exists
+                if next((r for r in orders if
+                         r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
+                             'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]), None):
+                    route = next((r for r in orders if
+                                  r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
+                                      'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]),
+                                 None)
+                    route['quantity'] += order.quantity
+                    route['price'] += order.price
+                else:
+                    orders.append({
+                        "from": cluster_from,
+                        "to": cluster_to,
+                        "vendor_code": order.vendor_code,
+                        "quantity": order.quantity,
+                        "price": order.price,
+                        "week": posting.processTo.isocalendar()[1]
+                    })
 
     print(f"Всего заказов: {len(orders)}")
 
@@ -118,10 +129,10 @@ def main(period_transactions: int = 30):
     # Конфигурация вывода данных
     console = Console(safe_box=False, force_terminal=True)
     console.size = (250, 38)
-    table = Table(show_footer=False)
-    table.title = "Артикулы магазина"
+    table = Table(show_footer=True)
+    table.title = f"Артикулы магазина для кластера {cluster_to_calc.name}"
     table.add_column("Артикул", no_wrap=True)
-    table.add_column("Кластер", no_wrap=True)
+    table.add_column("Кластер откуда", no_wrap=True)
     table.add_column("Остаток", justify="center")
     table.add_column("Всего продано", justify="center")
     table.add_column("Продаж в неделю", justify="center")
@@ -133,20 +144,20 @@ def main(period_transactions: int = 30):
 
     for vendor_code in tqdm(selected_products):
         # find all orders with vendor_code
-        vendor_orders = [o for o in orders if o['vendor_code'] == vendor_code and o['from'] == cluster_from]
+        vendor_orders = [o for o in orders if o['vendor_code'] == vendor_code and o['to'] == cluster_to_calc]
         logger.info(f"Для артукула {vendor_code} найдено {len(vendor_orders)} заказов")
         if len(vendor_orders) == 0:
             continue
         # find all clusters to
-        clusters_to = []
+        clusters_from = []
         for order in vendor_orders:
-            if order['to'] not in clusters_to:
-                clusters_to.append(order['to'])
-        logger.info(f"Для артукула {vendor_code} найдено {len(clusters_to)} кластеров")
+            if order['from'] not in clusters_from:
+                clusters_from.append(order['from'])
+        logger.info(f"Для артукула {vendor_code} найдено {len(clusters_from)} кластеров")
 
-        for cluster_to in clusters_to:
-            cluster_orders = [o for o in vendor_orders if o['to'] == cluster_to]
-            logger.info(f"{len(cluster_orders)} заказов на кластер {cluster_to.name}")
+        for cluster_from in clusters_from:
+            cluster_orders = [o for o in vendor_orders if o['from'] == cluster_from]
+            logger.info(f"{len(cluster_orders)} заказов на кластер {cluster_from.name}")
 
             product_sold = {x: 0 for x in range(datetime.now().isocalendar()[1] - period_transactions,
                                                 datetime.now().isocalendar()[1])}
@@ -171,13 +182,13 @@ def main(period_transactions: int = 30):
             avg_delivery_time = delivery_time + timedelta(days=prepare_days)
 
             # Текущий остаток в кластере
-            stock_search = [s for s in stocks if s.vendor_code == vendor_code and s.warehouse in cluster_to.warehouses]
+            stock_search = [s for s in stocks if s.vendor_code == vendor_code and s.warehouse in cluster_from.warehouses]
             if len(stock_search) == 0:
-                logger.warning(f"Нет стока для {vendor_code}, кластер: {cluster_to.name}")
+                logger.warning(f"Нет стока для {vendor_code}, кластер: {cluster_from.name}")
                 stock = 0
             else:
                 stock = sum([s.free_to_sell_amount for s in stock_search])
-            logger.info(f"Число остатков: {stock} для {vendor_code} в {cluster_to.name}")
+            logger.info(f"Число остатков: {stock} для {vendor_code} в {cluster_from.name}")
 
             style = None
             predication_fos = PredictionFOS()
@@ -213,7 +224,7 @@ def main(period_transactions: int = 30):
                     'vendor_code': vendor_code,
                     'log_sales_total': product_sold[week],
                     'avg_price': avg_price_by_week[week],
-                    'cluster': cluster_to.name
+                    'cluster': cluster_from.name
                 })
             predicts = [{
                 'vendor_code': vendor_code,
@@ -224,7 +235,7 @@ def main(period_transactions: int = 30):
 
             table.add_row(
                 vendor_code,
-                cluster_to.name,
+                cluster_from.name,
                 str(stock),
                 str(total_sold),
                 "{:.2f}".format(avg_count_per_week),
