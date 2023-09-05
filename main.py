@@ -92,9 +92,9 @@ def main(period_transactions: int = 35):
             logger.error(f"Не удалось определить кластер для склада {posting.warehouse}")
             continue
 
-        if cluster_to_calc.name != cluster_to.name:
-            logger.warning(f"Не совпадает кластер {cluster_to_calc.name} и {cluster_to.name}")
-            continue
+        # if cluster_to_calc.name != cluster_to.name:
+        #     logger.warning(f"Не совпадает кластер {cluster_to_calc.name} и {cluster_to.name}")
+        #     continue
 
         for order in posting.orders:
             if order.vendor_code in selected_products:
