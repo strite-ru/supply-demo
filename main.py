@@ -1,4 +1,3 @@
-import json
 import logging
 import math
 from typing import List
@@ -8,12 +7,12 @@ from datetime import timedelta, datetime
 from rich.console import Console
 from rich.table import Table
 from strite_data_hub.dataclasses import PredictionFOS, PredictionFOF
-from strite_data_hub.parsers.ozon import OzonAPI, OzonWarehouse, OzonProduct, OzonStockOnWarehouse, OzonTransaction, \
-    OzonPosting
+from strite_data_hub.parsers.ozon import OzonAPI, OzonStockOnWarehouse, OzonFBOPosting
 from strite_data_hub.prediction.supplies.basic import get_basic_predication_supplies_fos, \
     get_basic_predication_supplies_fof
+from strite_data_hub.prediction.supplies.catboost import get_prediction
+from strite_data_hub.parsers.ozon.utils import get_clusters_with_warehouses, OzonCluster
 from tqdm import tqdm
-
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -21,91 +20,100 @@ logging.basicConfig(
 )
 logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
+clusters = get_clusters_with_warehouses()
 
 
 def init_data() -> OzonAPI:
-    client_id = input("Client-Id: ")
+    client_id = input("Client-Id: ", )
     api_key = input("Api-Key: ")
 
     return OzonAPI(client_id=int(client_id), key=api_key)
 
 
-def select_products(products: List[OzonProduct]) -> List[OzonProduct]:
-    products_vendor_codes = [product.vendor_code for product in products]
-    products_vendor_codes.sort()
-    selected_products = pick.pick(products_vendor_codes, "Выберите товары, которые будут отправляться:\nЕсли ничего не выбрано то все товары",
-                                               multiselect=True)
-
+def select_vendor_codes(vendor_codes: List[str]) -> List[str]:
+    vendor_codes.sort()
+    selected_products = pick.pick(vendor_codes,
+                                  "Выберите товары, которые будут отправляться:\nЕсли ничего не выбрано то все товары",
+                                  multiselect=True)
     if not selected_products:
-        return products
-
-    selected_products_vendor_codes = [vendor_code for vendor_code, _ in selected_products]
-    return [product for product in products if product.vendor_code in selected_products_vendor_codes]
+        return vendor_codes
+    return [vendor_code for vendor_code, _ in selected_products]
 
 
-def select_warehouses_from(w: List[dict], warehouses: List[OzonWarehouse]) -> OzonWarehouse:
-    warehouses_local_from = [warehouse.get("name", "None") for warehouse in w if
-                             len(warehouse.get("cross-docking", []))]
-    from_name = pick.pick(warehouses_local_from, "Выберите склад, с которого будут забираться товары:")[0]
-    warehouse_from = [w for w in w if w.get("name", "None") == from_name][0]
-    return [w for w in warehouses if w.id == warehouse_from.get("id", None)][0]
+def get_cluster_by_region(region: str) -> OzonCluster:
+    return next((c for c in clusters if region in c.regions), None)
 
 
-def select_warehouses_to(w: List[dict], warehouses: List[OzonWarehouse]) -> OzonWarehouse:
-    warehouses_local_to = [warehouse.get("name", "None") for warehouse in w]
-    to_name = pick.pick(warehouses_local_to, "Выберите склад, на который будут отправляться товары:")[0]
-    warehouse_to = [w for w in w if w.get("name", "None") == to_name][0]
-    return [w for w in warehouses if w.id == warehouse_to.get("id", None)][0]
+def get_cluster_by_warehouse_id(warehouse_id: str) -> OzonCluster:
+    return next((c for c in clusters if warehouse_id in [w.id for w in c.warehouses]), None)
 
 
-def main(period_transactions: int = 29):
-    warehouses_local = json.load(open('./warehouses.json', encoding="utf8"))
+def get_cluster_by_name(name: str) -> OzonCluster:
+    return next((c for c in clusters if c.name == name), None)
 
+
+def main(period_transactions: int = 30):
     api = init_data()
 
-    try:
-        products: List[OzonProduct] = list(OzonProduct.get_products(api))
-        selected_products: List[OzonProduct] = select_products(products)
-        logger.info(f"Выбрано {len(selected_products)} товаров")
-    except Exception as e:
-        logger.error(e)
-        exit(1)
+    postings: List[OzonFBOPosting] = list(OzonFBOPosting.get_postings(api,
+                                                                      status="delivered",
+                                                                      date_from=(datetime.now() - timedelta(
+                                                                          weeks=period_transactions))))
 
-    warehouses = list(OzonWarehouse.get_warehouses(api))
-    warehouse_from = select_warehouses_from(warehouses_local, warehouses)
-    ws_id = [ww.get("id") for ww in [w for w in warehouses_local if w.get("id", None) == warehouse_from.id][0].get("cross-docking", [])]
-    warehouse_to = select_warehouses_to([w for w in warehouses_local if w.get("id", None) in ws_id], warehouses)
+    logger.info(f"Всего отправлений: {len(postings)}")
+    # convert to product list from postings
+    vendor_codes = []
+    for product in postings:
+        for order in product.orders:
+            if order.vendor_code not in vendor_codes:
+                vendor_codes.append(order.vendor_code)
 
-    logger.info(f"Склад приема: {warehouse_to.name}")
-    logger.info(f"Склад отправки: {warehouse_from.name}")
+    # selected_products = vendor_codes
+    selected_products: List[str] = select_vendor_codes(vendor_codes)
+    logger.info(f"Выбрано {len(selected_products)} товаров")
 
-    wl = [w for w in warehouses_local if w.get("id", None) == warehouse_from.id][0]
-    dt = [w for w in wl.get("cross-docking", []) if w.get("id", None) == warehouse_to.id][0].get("duration_max", 0)
-    delivery_time = timedelta(days=dt)
-    del wl, dt
-    logger.info(f"Время доставки: {delivery_time}")
-
+    # TODO выбор склада отгрузки
+    cluster_from = get_cluster_by_name('Северо-запад')
     size_supply = int(input("Введите размер поставки: "))
     period_supply = int(input("Введите период поставки: "))
     prepare_days = int(input("Введите время подготовки (дни): "))
 
+    orders = []
+    for posting in postings:
+        cluster_from = get_cluster_by_warehouse_id(str(posting.warehouse['id']))
+        cluster_to = get_cluster_by_region(posting.warehouse['region'])
+        if (cluster_from is None) or (cluster_to is None):
+            logger.error(f"Не удалось определить кластер для склада {posting.warehouse}")
+        else:
+            for order in posting.orders:
+                if order.vendor_code in selected_products:
+                    # update route if vendor_code, from, to, week exists
+                    if next((r for r in orders if
+                             r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
+                                 'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]), None):
+                        route = next((r for r in orders if
+                                      r['vendor_code'] == order.vendor_code and r['from'] == cluster_from and r[
+                                          'to'] == cluster_to and r['week'] == posting.processTo.isocalendar()[1]),
+                                     None)
+                        route['quantity'] += order.quantity
+                        route['price'] += order.price
+                    else:
+                        orders.append({
+                            "from": cluster_from,
+                            "to": cluster_to,
+                            "vendor_code": order.vendor_code,
+                            "quantity": order.quantity,
+                            "price": order.price,
+                            "week": posting.processTo.isocalendar()[1]
+                        })
+
+    print(f"Всего заказов: {len(orders)}")
+
+    # fix price to avg
+    for p_data in orders:
+        p_data['price'] /= p_data['quantity']
+
     stocks = list(OzonStockOnWarehouse.get_stocks(api))
-
-    # Получаем данные о транзакциях
-    transactions = list(OzonTransaction.get_transactions(
-        api=api,
-        start_date=datetime.now() - timedelta(days=period_transactions),
-        end_date=datetime.now()
-    ))
-
-    logger.info(f"Всего транзакций за период: {len(transactions)}")
-    # Фильтруем операции по FBO
-    fbo_transactions = [tr for tr in transactions if tr.order_type == 0]
-    logger.info(f"Все операций по FBO: {len(fbo_transactions)}")
-
-    # Список артикулов за период
-    skus = list({tr.marketplace_product for tr in fbo_transactions})
-    logger.info(f"Всего sku за период: {len(skus)}")
 
     # Конфигурация вывода данных
     console = Console(safe_box=False, force_terminal=True)
@@ -113,100 +121,120 @@ def main(period_transactions: int = 29):
     table = Table(show_footer=False)
     table.title = "Артикулы магазина"
     table.add_column("Артикул", no_wrap=True)
-    table.add_column("Склад", no_wrap=True)
+    table.add_column("Кластер", no_wrap=True)
     table.add_column("Остаток", justify="center")
     table.add_column("Всего продано", justify="center")
-    table.add_column("Продаж в день", justify="center")
-    table.add_column("sigma", justify="center")
+    table.add_column("Продаж в неделю", justify="center")
     table.add_column("До поставки", justify="center")
     table.add_column("Дата поставки", justify="center")
     table.add_column("Размер поставки", justify="center")
     table.add_column("Дата поставки", justify="center")
+    table.add_column("ML поставка", justify="center")
 
-    for sku in tqdm(skus):
-        def get_product() -> OzonProduct | None:
-            _p = None
-            for item in selected_products:
-                if next((item for _size in item.sizes if _size.id == sku and _size.type == 'fbo'), None):
-                    _p = item
-            return _p
-        logger.info(f"Обрабатываем sku {sku}")
-        product: OzonProduct | None = get_product()
-
-        if product is None:
-            logger.info(f"Мы пропускаем sku {sku}. Нет информации о товаре")
+    for vendor_code in tqdm(selected_products):
+        # find all orders with vendor_code
+        vendor_orders = [o for o in orders if o['vendor_code'] == vendor_code and o['from'] == cluster_from]
+        logger.info(f"Для артукула {vendor_code} найдено {len(vendor_orders)} заказов")
+        if len(vendor_orders) == 0:
             continue
+        # find all clusters to
+        clusters_to = []
+        for order in vendor_orders:
+            if order['to'] not in clusters_to:
+                clusters_to.append(order['to'])
+        logger.info(f"Для артукула {vendor_code} найдено {len(clusters_to)} кластеров")
 
-        # Транзакции по товару
-        product_transactions = [tr for tr in fbo_transactions if (tr.marketplace_product == sku)]
-        logger.info(f"Всего транзакций по товару: {len(product_transactions)}")
-        # Отправления по товару
-        product_postings = list({tr.order_id for tr in product_transactions})
-        product_sold = {x: 0 for x in range(period_transactions)}
+        for cluster_to in clusters_to:
+            cluster_orders = [o for o in vendor_orders if o['to'] == cluster_to]
+            logger.info(f"{len(cluster_orders)} заказов на кластер {cluster_to.name}")
 
-        for p_n in product_postings:
-            posting = OzonPosting.get_fbo_posting_by_posting_number(api, p_n)
-            count = sum([o.quantity for o in posting.orders if o.vendor_code == product.vendor_code], 0)
-            if str(posting.warehouse_id) == warehouse_to.id:
-                product_sold[(datetime.now() - posting.processTo).days] = count
+            product_sold = {x: 0 for x in range(datetime.now().isocalendar()[1] - period_transactions,
+                                                datetime.now().isocalendar()[1])}
+            for order in cluster_orders:
+                product_sold[order['week']] += order['quantity']
 
-        total_sold = sum([product_sold[x] for x in product_sold.keys()])
-        logger.info(f"Всего продано: {total_sold}")
+            total_sold = sum([product_sold[x] for x in product_sold.keys()])
 
-        avg_count_per_day = total_sold / period_transactions
-        logger.info(f"Среднее число продаж в день: {avg_count_per_day}")
-        rms_deviation = math.sqrt(1/period_transactions * math.pow(sum([(product_sold[x] - avg_count_per_day) for x in product_sold.keys()]), 2))
+            avg_price_by_week = {x: 0 for x in range(datetime.now().isocalendar()[1] - period_transactions,
+                                                     datetime.now().isocalendar()[1])}
+            for order in cluster_orders:
+                avg_price_by_week[order['week']] += order['price']
 
-        # Среднее время доставки (из матрицы доставки) + обработки
-        avg_delivery_time = delivery_time + timedelta(days=prepare_days)
+            avg_count_per_week = total_sold / period_transactions
+            rms_deviation = math.sqrt(1 / period_transactions * math.pow(
+                sum([(product_sold[x] - avg_count_per_week) for x in product_sold.keys()]), 2))
 
-        # Текущий остаток на складе
-        stock_search = [s for s in stocks if s.vendor_code == product.vendor_code and s.warehouse == warehouse_to]
-        if len(stock_search) == 0:
-            logger.warning(f"Нет стока для {product.vendor_code}, склад: {warehouse_to.name}")
-            stock = 0
-        else:
-            stock = stock_search[0].free_to_sell_amount
+            # TODO Срок кросс-докинга (из матрицы доставки)
+            delivery_time = timedelta(days=6)
 
-        style = None
-        predication_fos = PredictionFOS()
-        predication_fof = PredictionFOF()
-        if avg_count_per_day > 0:
-            predication_fos = get_basic_predication_supplies_fos(current_stock=stock,
-                                                                 avg_consumption=avg_count_per_day,
-                                                                 deviation_sales=rms_deviation,
-                                                                 size_supply=size_supply,
-                                                                 supply_delivery_time=avg_delivery_time)
-            predication_fof = get_basic_predication_supplies_fof(current_stock=stock,
-                                                                 avg_consumption=avg_count_per_day,
-                                                                 deviation_sales=rms_deviation,
-                                                                 supply_delivery_time=avg_delivery_time,
-                                                                 period=timedelta(days=period_supply))
+            # Среднее время доставки (из матрицы доставки) + обработки
+            avg_delivery_time = delivery_time + timedelta(days=prepare_days)
 
-            if (predication_fos.supply_date or predication_fof.supply_date) < avg_delivery_time:
-                style = "orange_red1 on white"
-            if predication_fos.supply_date.days < 0:
-                predication_fos.supply_date = timedelta(days=0)
-            if predication_fof.supply_date.days < 0:
-                predication_fof.supply_date = timedelta(days=0)
+            # Текущий остаток в кластере
+            stock_search = [s for s in stocks if s.vendor_code == vendor_code and s.warehouse in cluster_to.warehouses]
+            if len(stock_search) == 0:
+                logger.warning(f"Нет стока для {vendor_code}, кластер: {cluster_to.name}")
+                stock = 0
+            else:
+                stock = sum([s.free_to_sell_amount for s in stock_search])
+            logger.info(f"Число остатков: {stock} для {vendor_code} в {cluster_to.name}")
 
-        if avg_count_per_day == 0 or stock == 0:
-            style = "red on white"
+            style = None
+            predication_fos = PredictionFOS()
+            predication_fof = PredictionFOF()
+            if avg_count_per_week > 0:
+                predication_fos = get_basic_predication_supplies_fos(current_stock=stock,
+                                                                     avg_consumption=avg_count_per_week,
+                                                                     deviation_sales=rms_deviation,
+                                                                     size_supply=size_supply,
+                                                                     supply_delivery_time=avg_delivery_time)
+                predication_fof = get_basic_predication_supplies_fof(current_stock=stock,
+                                                                     avg_consumption=avg_count_per_week,
+                                                                     deviation_sales=rms_deviation,
+                                                                     supply_delivery_time=avg_delivery_time,
+                                                                     period=timedelta(days=period_supply))
+
+                if (predication_fos.supply_date or predication_fof.supply_date) < avg_delivery_time:
+                    style = "orange_red1 on white"
+                if predication_fos.supply_date.days < 0:
+                    predication_fos.supply_date = timedelta(days=0)
+                if predication_fof.supply_date.days < 0:
+                    predication_fof.supply_date = timedelta(days=0)
+
+            if avg_count_per_week == 0 or stock == 0:
+                style = "red on white"
 
 
-        table.add_row(
-            product.vendor_code,
-            warehouse_to.name,
-            str(stock),
-            str(total_sold),
-            "{:.2f}".format(avg_count_per_day),
-            "{:.2f}".format(rms_deviation),
-            str(predication_fos.supply_date.days),
-            (datetime.now() + predication_fos.supply_date).strftime("%d.%m.%Y"),
-            "{:.2f}".format(predication_fof.supply_size),
-            (datetime.now() + predication_fof.supply_date).strftime("%d.%m.%Y"),
-            style=style
-        )
+            data_for_ml = []
+            for week in range(datetime.now().isocalendar()[1] - period_transactions,
+                              datetime.now().isocalendar()[1]):
+                data_for_ml.append({
+                    'week': week,
+                    'vendor_code': vendor_code,
+                    'log_sales_total': product_sold[week],
+                    'avg_price': avg_price_by_week[week],
+                    'cluster': cluster_to.name
+                })
+            predicts = [{
+                'vendor_code': vendor_code,
+                'week': datetime.now().isocalendar()[1],
+                'avg_price': avg_price_by_week[datetime.now().isocalendar()[1]-1]
+            }]
+            results = get_prediction(data_for_ml, predicts)
+
+            table.add_row(
+                vendor_code,
+                cluster_to.name,
+                str(stock),
+                str(total_sold),
+                "{:.2f}".format(avg_count_per_week),
+                str(predication_fos.supply_date.days),
+                (datetime.now() + predication_fos.supply_date).strftime("%d.%m.%Y"),
+                "{:.2f}".format(predication_fof.supply_size),
+                (datetime.now() + predication_fof.supply_date).strftime("%d.%m.%Y"),
+                "{:.2f}".format(results[0]),
+                style=style
+            )
 
     console.print(table)
 
