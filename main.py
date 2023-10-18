@@ -66,11 +66,7 @@ def main(period_transactions: int = 3):
     :param period_transactions: недель до текущей даты, за которые необходимо взять данные по API
     :return: None
     """
-    # api = init_data()
-    api = OzonAPI(
-        client_id=166585,
-        key="58cc2e73-6592-4a62-a96f-0f2b029f1478"
-    )
+    api = init_data()
 
     postings: List[OzonFBOPosting] = list(OzonFBOPosting.get_postings(api,
                                                                       status="delivered",
